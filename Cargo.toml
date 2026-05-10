@@ -7,7 +7,7 @@ license = "MIT"
 repository = "https://github.com/isSerge/rhai-analyzer"
 authors = ["Serge Kovbasiuk <isserge@protonmail.com>"]
 keywords = ["rhai", "static-analysis", "ast", "variable-paths", "string-comparisons"]
-categories = ["development-tools", "parsing", "static-analysis"]
+categories = ["development-tools", "parsing"]
 
 [dependencies]
 rhai = { version = "1.22.2", features = ["internals"] }
