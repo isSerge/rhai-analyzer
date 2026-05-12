@@ -188,8 +188,7 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 [[package]]
 name = "rhai"
 version = "1.24.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f9ef5dabe4c0b43d8f1187dc6beb67b53fe607fff7e30c5eb7f71b814b8c2c1"
+source = "git+https://github.com/rhaiscript/rhai#b247dd730de3f2c97fa1e46f138a17f9d844de67"
 dependencies = [
  "ahash",
  "bitflags",
@@ -211,9 +210,8 @@ dependencies = [
 
 [[package]]
 name = "rhai_codegen"
-version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4322a2a4e8cf30771dd9f27f7f37ca9ac8fe812dddd811096a98483080dabe6"
+version = "3.2.0"
+source = "git+https://github.com/rhaiscript/rhai#b247dd730de3f2c97fa1e46f138a17f9d844de67"
 dependencies = [
  "proc-macro2",
  "quote",

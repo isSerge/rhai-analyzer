@@ -10,4 +10,4 @@ keywords = ["rhai", "static-analysis", "ast", "variable-paths", "string-comparis
 categories = ["development-tools", "parsing"]
 
 [dependencies]
-rhai = { version = "1.22.2", features = ["internals"] }
+rhai = { git = "https://github.com/rhaiscript/rhai", features = ["internals"] }

@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use rhai::{AST, Expr, Stmt};
+use rhai::{AST, ASTNode, Expr, Stmt};
 
 /// The result of a static analysis pass over a Rhai [`AST`].
 #[derive(Debug, Default)]
@@ -32,178 +32,123 @@ pub struct ScriptAnalysisResult {
 /// This is the primary entry point for the analyzer.
 pub fn analyze_ast(ast: &AST) -> ScriptAnalysisResult {
     let mut result = ScriptAnalysisResult::default();
-    for stmt in ast.statements() {
-        walk_stmt(stmt, &mut result);
-    }
+
+    ast.walk(&mut |nodes: &[ASTNode]| {
+        let parent = nodes.len().checked_sub(2).map(|i| &nodes[i]);
+
+        match nodes.last().unwrap() {
+            // ---------------------------------------------------------------
+            // Statement nodes
+            // ---------------------------------------------------------------
+            ASTNode::Stmt(stmt) => match *stmt {
+                // Track locally-defined variables.
+                Stmt::Var(var_def, _, _) => {
+                    result.local_variables.insert(var_def.0.name.to_string());
+                }
+                Stmt::For(for_loop, _) => {
+                    result.local_variables.insert(for_loop.0.name.to_string());
+                    if let Some(counter) = &for_loop.1 {
+                        result.local_variables.insert(counter.name.to_string());
+                    }
+                }
+                // Rhai compiles a bare `a == "b"` as Stmt::FnCall (not
+                // Stmt::Expr), so the FnCall is never surfaced as
+                // ASTNode::Expr. Check for comparisons here.
+                Stmt::FnCall(fn_call, _) => {
+                    if fn_call.namespace.is_empty() && fn_call.args.len() == 2 {
+                        match fn_call.name.as_str() {
+                            "==" | "!=" => {
+                                record_string_comparison(
+                                    &fn_call.args[0],
+                                    &fn_call.args[1],
+                                    &mut result,
+                                );
+                                record_string_comparison(
+                                    &fn_call.args[1],
+                                    &fn_call.args[0],
+                                    &mut result,
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            },
+
+            // ---------------------------------------------------------------
+            // Expression nodes
+            // ---------------------------------------------------------------
+            ASTNode::Expr(expr) => {
+                // String comparison detection (single node; walker recurses
+                // for us into FnCall args, And, Or, etc.).
+                if let Expr::FnCall(fn_call, _) = *expr
+                    && fn_call.namespace.is_empty() && fn_call.args.len() == 2 {
+                        match fn_call.name.as_str() {
+                            "==" | "!=" => {
+                                record_string_comparison(
+                                    &fn_call.args[0],
+                                    &fn_call.args[1],
+                                    &mut result,
+                                );
+                                record_string_comparison(
+                                    &fn_call.args[1],
+                                    &fn_call.args[0],
+                                    &mut result,
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+
+                // Variable path tracking.
+                // Skip Property nodes — they are only the rhs component of a
+                // Dot expression and are covered when the parent Dot node is
+                // visited.  Inserting them standalone would wrongly emit bare
+                // field names from chains like `arr[0].name`.
+                if !matches!(*expr, Expr::Property(..))
+                    && let Some(path) = get_full_variable_path(expr) {
+                        if !parent_subsumes(parent) {
+                            result.accessed_variables.insert(path);
+                        }
+                        // Index expressions also expose their index operand as
+                        // a separate access.
+                        if let Expr::Index(bin, _, _) = *expr
+                            && let Some(idx_path) = get_full_variable_path(&bin.rhs) {
+                                result.accessed_variables.insert(idx_path);
+                            }
+                    }
+            }
+
+            _ => {}
+        }
+
+        true
+    });
+
     result
 }
 
 // ---------------------------------------------------------------------------
-// Statement walker
+// Parent-subsumption check
 // ---------------------------------------------------------------------------
 
-fn walk_stmt(stmt: &Stmt, result: &mut ScriptAnalysisResult) {
-    // Check for string comparisons at the statement level before the main
-    // structural dispatch below.
-    match stmt {
-        Stmt::Expr(expr) => check_for_string_comparisons(expr, result),
-        Stmt::FnCall(fn_call_expr, _) => {
-            let expr = Expr::FnCall(fn_call_expr.clone(), rhai::Position::NONE);
-            check_for_string_comparisons(&expr, result);
-        }
-        _ => {}
-    }
-
-    match stmt {
-        Stmt::Expr(expr) => walk_expr(expr, result),
-        Stmt::Block(stmt_block) => {
-            for s in stmt_block.statements() {
-                walk_stmt(s, result);
-            }
-        }
-        Stmt::If(flow_control, _) => {
-            walk_expr(&flow_control.expr, result);
-            for s in flow_control.body.statements() {
-                walk_stmt(s, result);
-            }
-            for s in flow_control.branch.statements() {
-                walk_stmt(s, result);
-            }
-        }
-        Stmt::While(flow_control, _) => {
-            walk_expr(&flow_control.expr, result);
-            for s in flow_control.body.statements() {
-                walk_stmt(s, result);
-            }
-        }
-        Stmt::Do(flow_control, _, _) => {
-            for s in flow_control.body.statements() {
-                walk_stmt(s, result);
-            }
-            walk_expr(&flow_control.expr, result);
-        }
-        Stmt::For(for_loop, _) => {
-            result.local_variables.insert(for_loop.0.name.to_string());
-            if let Some(second_var) = &for_loop.1 {
-                result.local_variables.insert(second_var.name.to_string());
-            }
-            walk_expr(&for_loop.2.expr, result);
-            for s in for_loop.2.body.statements() {
-                walk_stmt(s, result);
-            }
-        }
-        Stmt::Var(var_definition, _, _) => {
-            result
-                .local_variables
-                .insert(var_definition.0.name.to_string());
-            walk_expr(&var_definition.1, result);
-        }
-        Stmt::Assignment(assignment) => {
-            walk_expr(&assignment.1.lhs, result);
-            walk_expr(&assignment.1.rhs, result);
-        }
-        Stmt::FnCall(fn_call_expr, _) => {
-            for arg in &fn_call_expr.args {
-                walk_expr(arg, result);
-            }
-        }
-        Stmt::Switch(switch_data, _) => {
-            let (expr, cases_collection) = &**switch_data;
-            walk_expr(expr, result);
-            for case_expr in &cases_collection.expressions {
-                walk_expr(&case_expr.lhs, result);
-                walk_expr(&case_expr.rhs, result);
-            }
-        }
-        Stmt::TryCatch(flow_control, _) => {
-            for s in flow_control.body.statements() {
-                walk_stmt(s, result);
-            }
-            for s in flow_control.branch.statements() {
-                walk_stmt(s, result);
-            }
-        }
-        Stmt::Return(Some(expr), _, _) | Stmt::BreakLoop(Some(expr), _, _) => {
-            walk_expr(expr, result);
-        }
-        Stmt::Import(import_data, _) => {
-            walk_expr(&import_data.0, result);
-        }
-        Stmt::Noop(_)
-        | Stmt::Return(None, _, _)
-        | Stmt::BreakLoop(None, _, _)
-        | Stmt::Export(_, _)
-        | Stmt::Share(_) => {}
-        _ => {}
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Expression walker
-// ---------------------------------------------------------------------------
-
-fn walk_expr(expr: &Expr, result: &mut ScriptAnalysisResult) {
-    check_for_string_comparisons(expr, result);
-
-    if let Some(path) = get_full_variable_path(expr) {
-        result.accessed_variables.insert(path);
-        if let Expr::Index(binary_expr, _, _) = expr
-            && let Some(index_path) = get_full_variable_path(&binary_expr.rhs)
-        {
-            result.accessed_variables.insert(index_path);
-        }
-        return;
-    }
-
-    match expr {
-        Expr::Dot(binary_expr, _, _) => {
-            walk_expr(&binary_expr.lhs, result);
-            walk_expr(&binary_expr.rhs, result);
-        }
-        Expr::Index(binary_expr, _, _) => {
-            walk_expr(&binary_expr.lhs, result);
-            if let Some(index_path) = get_full_variable_path(&binary_expr.rhs) {
-                result.accessed_variables.insert(index_path);
-            } else {
-                walk_expr(&binary_expr.rhs, result);
-            }
-        }
-        Expr::MethodCall(method_call_expr, _) => {
-            for arg in &method_call_expr.args {
-                walk_expr(arg, result);
-            }
-        }
-        Expr::FnCall(fn_call_expr, _) => {
-            for arg in &fn_call_expr.args {
-                walk_expr(arg, result);
-            }
-        }
-        Expr::And(expr_vec, _) | Expr::Or(expr_vec, _) | Expr::Coalesce(expr_vec, _) => {
-            for e in &**expr_vec {
-                walk_expr(e, result);
-            }
-        }
-        Expr::Array(expr_vec, _) | Expr::InterpolatedString(expr_vec, _) => {
-            for e in expr_vec {
-                walk_expr(e, result);
-            }
-        }
-        Expr::Map(map_data, _) => {
-            for (_, value_expr) in &map_data.0 {
-                walk_expr(value_expr, result);
-            }
-        }
-        Expr::Stmt(stmt_block) => {
-            for s in stmt_block.statements() {
-                walk_stmt(s, result);
-            }
-        }
-        Expr::Custom(custom_expr, _) => {
-            for e in &custom_expr.inputs {
-                walk_expr(e, result);
-            }
-        }
-        _ => {}
+/// Returns `true` when the current expression's variable path is already
+/// covered by its parent, so we should not insert it separately.
+///
+/// * A [`Expr::Dot`] parent that forms a complete path will have inserted the
+///   longer dotted path (e.g. `"tx.value"`) itself, so we skip the child
+///   `Variable("tx")`.
+/// * An [`Expr::Index`] parent handles both the lhs path and the rhs index
+///   path explicitly, so we skip both children.
+fn parent_subsumes(parent: Option<&ASTNode>) -> bool {
+    match parent {
+        Some(ASTNode::Expr(parent_expr)) => match *parent_expr {
+            Expr::Dot(..) => get_full_variable_path(parent_expr).is_some(),
+            Expr::Index(..) => true,
+            _ => false,
+        },
+        _ => false,
     }
 }
 
@@ -243,68 +188,6 @@ fn get_full_variable_path(expr: &Expr) -> Option<String> {
 // ---------------------------------------------------------------------------
 // String comparison tracking
 // ---------------------------------------------------------------------------
-
-/// Recursively checks an expression for `variable_path == "literal"` (or
-/// `!=`) patterns and records them in
-/// [`ScriptAnalysisResult::string_comparisons`].
-fn check_for_string_comparisons(expr: &Expr, result: &mut ScriptAnalysisResult) {
-    match expr {
-        Expr::FnCall(fn_call_expr, _) => {
-            if fn_call_expr.namespace.is_empty() && fn_call_expr.args.len() == 2 {
-                match fn_call_expr.name.as_str() {
-                    "==" | "!=" => {
-                        record_string_comparison(
-                            &fn_call_expr.args[0],
-                            &fn_call_expr.args[1],
-                            result,
-                        );
-                        record_string_comparison(
-                            &fn_call_expr.args[1],
-                            &fn_call_expr.args[0],
-                            result,
-                        );
-                    }
-                    _ => {
-                        for arg in &fn_call_expr.args {
-                            check_for_string_comparisons(arg, result);
-                        }
-                    }
-                }
-            } else {
-                for arg in &fn_call_expr.args {
-                    check_for_string_comparisons(arg, result);
-                }
-            }
-        }
-        Expr::And(expr_vec, _) | Expr::Or(expr_vec, _) => {
-            for e in &**expr_vec {
-                check_for_string_comparisons(e, result);
-            }
-        }
-        Expr::Dot(binary_expr, _, _) | Expr::Index(binary_expr, _, _) => {
-            check_for_string_comparisons(&binary_expr.lhs, result);
-            check_for_string_comparisons(&binary_expr.rhs, result);
-        }
-        Expr::MethodCall(method_call_expr, _) => {
-            for arg in &method_call_expr.args {
-                check_for_string_comparisons(arg, result);
-            }
-        }
-        Expr::Array(expr_vec, _) => {
-            for e in expr_vec {
-                check_for_string_comparisons(e, result);
-            }
-        }
-        Expr::Stmt(stmt_block) => {
-            for s in stmt_block.statements() {
-                if let Stmt::Expr(inner_expr) = s {
-                    check_for_string_comparisons(inner_expr, result);
-                }
-            }
-        }
-        _ => {}
-    }
-}
 
 /// If `lhs` is a variable path and `rhs` is a string literal, records the
 /// comparison in `result.string_comparisons`.
