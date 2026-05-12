@@ -148,10 +148,22 @@ pub fn analyze_ast(ast: &AST) -> ScriptAnalysisResult {
 fn parent_subsumes(parent: Option<&ASTNode>) -> bool {
     match parent {
         Some(ASTNode::Expr(parent_expr)) => match *parent_expr {
-            Expr::Dot(..) => get_full_variable_path(parent_expr).is_some(),
+            Expr::Dot(..) => is_variable_path(parent_expr),
             Expr::Index(..) => true,
             _ => false,
         },
+        _ => false,
+    }
+}
+
+/// Returns `true` if `expr` has the shape of a variable path (chain of
+/// [`Expr::Dot`] / [`Expr::Property`] / [`Expr::Variable`] / [`Expr::Index`]
+/// lhs), without allocating any strings.
+fn is_variable_path(expr: &Expr) -> bool {
+    match expr {
+        Expr::Dot(bin, _, _) => is_variable_path(&bin.lhs) && is_variable_path(&bin.rhs),
+        Expr::Property(..) | Expr::Variable(..) => true,
+        Expr::Index(bin, _, _) => is_variable_path(&bin.lhs),
         _ => false,
     }
 }
