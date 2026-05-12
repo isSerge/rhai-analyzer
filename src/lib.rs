@@ -54,23 +54,23 @@ pub fn analyze_ast(ast: &AST) -> ScriptAnalysisResult {
                 // Rhai compiles a bare `a == "b"` as Stmt::FnCall (not
                 // Stmt::Expr), so the FnCall is never surfaced as
                 // ASTNode::Expr. Check for comparisons here.
-                Stmt::FnCall(fn_call, _) => {
-                    if fn_call.namespace.is_empty() && fn_call.args.len() == 2 {
-                        match fn_call.name.as_str() {
-                            "==" | "!=" => {
-                                record_string_comparison(
-                                    &fn_call.args[0],
-                                    &fn_call.args[1],
-                                    &mut result,
-                                );
-                                record_string_comparison(
-                                    &fn_call.args[1],
-                                    &fn_call.args[0],
-                                    &mut result,
-                                );
-                            }
-                            _ => {}
+                Stmt::FnCall(fn_call, _)
+                    if fn_call.namespace.is_empty() && fn_call.args.len() == 2 =>
+                {
+                    match fn_call.name.as_str() {
+                        "==" | "!=" => {
+                            record_string_comparison(
+                                &fn_call.args[0],
+                                &fn_call.args[1],
+                                &mut result,
+                            );
+                            record_string_comparison(
+                                &fn_call.args[1],
+                                &fn_call.args[0],
+                                &mut result,
+                            );
                         }
+                        _ => {}
                     }
                 }
                 _ => {}
