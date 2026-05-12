@@ -1,6 +1,6 @@
 [package]
 name = "rhai-analyzer"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Static analysis of Rhai ASTs: extracts accessed variable paths and string comparisons"
 license = "MIT"
@@ -10,4 +10,4 @@ keywords = ["rhai", "static-analysis", "ast", "variable-paths", "string-comparis
 categories = ["development-tools", "parsing"]
 
 [dependencies]
-rhai = { version = "1.22.2", features = ["internals"] }
+rhai = { git = "https://github.com/rhaiscript/rhai", features = ["internals"] }
