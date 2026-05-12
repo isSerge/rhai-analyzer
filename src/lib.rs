@@ -83,23 +83,25 @@ pub fn analyze_ast(ast: &AST) -> ScriptAnalysisResult {
                 // String comparison detection (single node; walker recurses
                 // for us into FnCall args, And, Or, etc.).
                 if let Expr::FnCall(fn_call, _) = *expr
-                    && fn_call.namespace.is_empty() && fn_call.args.len() == 2 {
-                        match fn_call.name.as_str() {
-                            "==" | "!=" => {
-                                record_string_comparison(
-                                    &fn_call.args[0],
-                                    &fn_call.args[1],
-                                    &mut result,
-                                );
-                                record_string_comparison(
-                                    &fn_call.args[1],
-                                    &fn_call.args[0],
-                                    &mut result,
-                                );
-                            }
-                            _ => {}
+                    && fn_call.namespace.is_empty()
+                    && fn_call.args.len() == 2
+                {
+                    match fn_call.name.as_str() {
+                        "==" | "!=" => {
+                            record_string_comparison(
+                                &fn_call.args[0],
+                                &fn_call.args[1],
+                                &mut result,
+                            );
+                            record_string_comparison(
+                                &fn_call.args[1],
+                                &fn_call.args[0],
+                                &mut result,
+                            );
                         }
+                        _ => {}
                     }
+                }
 
                 // Variable path tracking.
                 // Skip Property nodes — they are only the rhs component of a
@@ -107,17 +109,19 @@ pub fn analyze_ast(ast: &AST) -> ScriptAnalysisResult {
                 // visited.  Inserting them standalone would wrongly emit bare
                 // field names from chains like `arr[0].name`.
                 if !matches!(*expr, Expr::Property(..))
-                    && let Some(path) = get_full_variable_path(expr) {
-                        if !parent_subsumes(parent) {
-                            result.accessed_variables.insert(path);
-                        }
-                        // Index expressions also expose their index operand as
-                        // a separate access.
-                        if let Expr::Index(bin, _, _) = *expr
-                            && let Some(idx_path) = get_full_variable_path(&bin.rhs) {
-                                result.accessed_variables.insert(idx_path);
-                            }
+                    && let Some(path) = get_full_variable_path(expr)
+                {
+                    if !parent_subsumes(parent) {
+                        result.accessed_variables.insert(path);
                     }
+                    // Index expressions also expose their index operand as
+                    // a separate access.
+                    if let Expr::Index(bin, _, _) = *expr
+                        && let Some(idx_path) = get_full_variable_path(&bin.rhs)
+                    {
+                        result.accessed_variables.insert(idx_path);
+                    }
+                }
             }
 
             _ => {}
